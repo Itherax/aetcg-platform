@@ -43,7 +43,6 @@ def approve(client, job_id, action="APPROVE", token=TOKEN):
 
 
 # ---------------------------------------------------------------- L2 ----
-@pytest.mark.xfail(strict=True, reason="F02 unfixed: state keyed by ticket_id")
 def test_s01_state_reachable_by_returned_id(client, redis_conn, run_worker):
     """S01 (F02, L2): the id returned by POST /triage can be used to read the ticket's state, including a COMPLETED one."""
     r = submit(client, "TCK-S01", "User asks for a password reset on the finance app.")
@@ -53,6 +52,16 @@ def test_s01_state_reachable_by_returned_id(client, redis_conn, run_worker):
     state = client.get(f"/api/v1/state/{job_id}")
     assert state.status_code == 200, state.text
     assert state.json()["status"] == "COMPLETED"
+
+
+def test_s01b_state_also_reachable_by_ticket_id_and_expires(client, redis_conn, run_worker):
+    """S01b (F02, L2): the ticket_id still resolves to the same state, and stored state carries a retention TTL."""
+    r = submit(client, "TCK-S01B", "Routine request")
+    job_id = r.json()["job_id"]
+    run_worker()
+    by_ticket = client.get("/api/v1/state/TCK-S01B")
+    assert by_ticket.status_code == 200 and by_ticket.json()["job_id"] == job_id
+    assert 0 < redis_conn.ttl(f"state:{job_id}") <= 7 * 24 * 3600
 
 
 # ---------------------------------------------------------------- L5 ----
