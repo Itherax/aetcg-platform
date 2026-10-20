@@ -199,3 +199,23 @@ def test_s15_queued_payload_contains_no_pii(client, redis_conn):
     job = Job.fetch(r.json()["job_id"], connection=redis_conn)
     raw_text = job.args[0]["raw_text"]
     assert "123-45-6789" not in raw_text and "bob@gmail.com" not in raw_text, raw_text
+
+
+# ---------------------------------------------------------------- L6 ----
+def test_s16_same_text_from_another_reporter_is_not_served_from_cache(client, redis_conn, run_worker):
+    """S16 (F04, L6): identical text under a different ticket id gets its own job; the cache never returns another ticket."""
+    first = submit(client, "TCK-S16A", "My laptop was stolen with customer records on it.", reporter="alice@enterprise.com")
+    run_worker()
+    second = submit(client, "TCK-S16B", "My laptop was stolen with customer records on it.", reporter="bob@enterprise.com")
+    assert second.status_code == 202, second.text
+    assert second.json()["job_id"] != first.json()["job_id"]
+
+
+def test_s16b_cache_key_is_stable_across_processes():
+    """S16b (F04, L6): the cache key for a payload is the same in two separate Python processes."""
+    import subprocess, sys
+    code = ("from main import cache_key; "
+            "print(cache_key({'ticket_id': 'T', 'reporter_email': 'a@enterprise.com', 'raw_text': 'x'}))")
+    runs = {subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True).stdout.strip()
+            for _ in range(2)}
+    assert len(runs) == 1, runs
