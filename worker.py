@@ -75,22 +75,9 @@ def process_pipeline_task(payload: dict):
         observe_histogram(TICKET_PROCESSING_TIME_SECONDS, processing_time, {"status": "success"})
         increment_counter(TICKET_PROCESSING_TOTAL, {"status": "success"})
 
-        # Extract and record business metrics from result
-        if isinstance(result, dict):
-            # Risk score
-            if "risk_score" in result:
-                observe_histogram(TICKET_RISK_SCORE_DISTRIBUTION, result["risk_score"])
-
-            # Category (if available)
-            # Note: category might be in the triage verdict or elsewhere in a real implementation
-
-            # Compliance check results
-            if "critic_feedback" in result:
-                # Simplified compliance check - in reality this would be more structured
-                if "pass" in result["critic_feedback"].lower() or "compliant" in result["critic_feedback"].lower():
-                    increment_counter(COMPLIANCE_PASS_TOTAL)
-                else:
-                    increment_counter(COMPLIANCE_FAIL_TOTAL)
+        # Business metrics (risk distribution, category, compliance) are
+        # owned by the orchestrator, which has the typed values; counting
+        # them again here doubled every figure on the dashboard.
 
         # Cache the final state result for API lookup
         redis_connection.set(f"cache:{hash(payload['raw_text'])}", json.dumps(result), ex=600)
@@ -123,8 +110,7 @@ def process_pipeline_task(payload: dict):
         set_gauge(QUEUE_PROCESSING_JOBS, 0, {"queue_name": "aetcg_jobs"})
 
 def queue_triage_job(payload: dict):
-    # Record job enqueue metrics
-    increment_counter(TICKET_INGESTION_TOTAL, {"status": "queued"})
+    # Ingestion is counted once, by the API, after the enqueue succeeds.
     job = task_queue.enqueue(process_pipeline_task, payload)
 
     # Update queue depth gauge (approximate - in practice you'd get this from Redis)

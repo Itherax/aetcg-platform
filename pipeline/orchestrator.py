@@ -11,9 +11,6 @@ from app.metrics import (
     TICKET_CATEGORY_TOTAL,
     COMPLIANCE_PASS_TOTAL,
     COMPLIANCE_FAIL_TOTAL,
-    LLM_API_CALLS_TOTAL,
-    LLM_API_DURATION_SECONDS,
-    TICKET_PROCESSING_TIME_SECONDS
 )
 
 # Tickets at or above this score always wait for a human.
@@ -63,24 +60,19 @@ class StateMachineOrchestrator:
         }
 
         # Step 2: Triage
-        triage_start = time.time()
+        # LLM call counts and durations are recorded inside the agents.
         triage_output = self.triage_agent.analyze(state["sanitized_text"])
-        triage_time = time.time() - triage_start
         state["risk_score"] = triage_output["risk_score"]
         state["category"] = triage_output.get("category", "UNCLASSIFIED")
         state["triage_verdict"] = triage_output["verdict"]
-        observe_histogram(LLM_API_DURATION_SECONDS, triage_time, {"agent_name": "triage"})
         if isinstance(state["risk_score"], int):
             observe_histogram(TICKET_RISK_SCORE_DISTRIBUTION, state["risk_score"])
         increment_counter(TICKET_CATEGORY_TOTAL, {"category": state["category"]})
 
         # Step 3: Critic
-        critic_start = time.time()
         critic_output = self.critic_agent.critique(state["triage_verdict"], state["risk_score"])
-        critic_time = time.time() - critic_start
         state["critic_feedback"] = critic_output["feedback"]
         state["audit_passed"] = critic_output["audit_passed"]
-        observe_histogram(LLM_API_DURATION_SECONDS, critic_time, {"agent_name": "critic"})
         if state["audit_passed"]:
             increment_counter(COMPLIANCE_PASS_TOTAL)
         else:
@@ -105,5 +97,5 @@ class StateMachineOrchestrator:
         state["status"] = "COMPLETED"
         # Every outcome is stored: an autonomous close must be auditable too.
         self.persist_state(state)
-        observe_histogram(TICKET_PROCESSING_TIME_SECONDS, time.time() - start_time, {"status": "success"})
+        # Processing time is observed once, by the worker, around the whole task.
         return state

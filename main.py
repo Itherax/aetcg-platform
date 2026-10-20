@@ -307,7 +307,8 @@ async def ingest_ticket(request: Request, payload: TicketIngestionSchema):
             payload.raw_text = clean_text
             # Re-hash the sanitized payload
             payload_hash = hash(payload.raw_text)
-            # Check cache again with sanitized payload
+            # Check cache again with sanitized payload. The miss above already
+            # counted this request; a second lookup is not a second miss.
             cached_result = redis_client.get(f"cache:{payload_hash}")
             if cached_result:
                 # Record cache hit after sanitization
@@ -318,10 +319,7 @@ async def ingest_ticket(request: Request, payload: TicketIngestionSchema):
                     "latency_ms": (time.time() - start_time) * 1000,
                     "client_ip": client_ip
                 }))
-                return json.loads(cached_result)
-        else:
-            # Record cache miss after sanitization check
-            increment_counter(CACHE_MISSES_TOTAL, {"cache_type": "redis"})
+                return JSONResponse(content=json.loads(cached_result), status_code=status.HTTP_200_OK)
 
     try:
         # Milestone 4: Enqueue task asynchronously to decouple runtime processing
