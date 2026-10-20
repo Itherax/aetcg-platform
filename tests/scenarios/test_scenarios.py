@@ -56,7 +56,6 @@ def test_s01_state_reachable_by_returned_id(client, redis_conn, run_worker):
 
 
 # ---------------------------------------------------------------- L5 ----
-@pytest.mark.xfail(strict=True, reason="F01 unfixed: fail-open triage")
 def test_s02_llm_outage_does_not_auto_complete(client, redis_conn, run_worker, mock_llm):
     """S02 (F01, L5): when the model returns HTTP 500 the ticket is paused for a human, not completed."""
     mock_llm.mode = "fail"
@@ -66,7 +65,6 @@ def test_s02_llm_outage_does_not_auto_complete(client, redis_conn, run_worker, m
     assert out["status"] == "PAUSED_FOR_REVIEW", out
 
 
-@pytest.mark.xfail(strict=True, reason="F01 unfixed: fenced JSON treated as failure")
 def test_s03_fenced_json_is_parsed(client, redis_conn, run_worker, mock_llm):
     """S03 (F01, L5): a reply wrapped in a ```json fence is parsed; a score of 9 pauses the ticket."""
     mock_llm.mode = "fenced:9"
@@ -76,7 +74,6 @@ def test_s03_fenced_json_is_parsed(client, redis_conn, run_worker, mock_llm):
     assert out["status"] == "PAUSED_FOR_REVIEW" and out.get("risk_score") == 9, out
 
 
-@pytest.mark.xfail(strict=True, reason="F06 unfixed: unvalidated model output")
 def test_s04_missing_score_is_not_lost(client, redis_conn, run_worker, mock_llm):
     """S04 (F06, L5): a reply without risk_score pauses the ticket instead of crashing the job."""
     mock_llm.mode = "noscore:9"
@@ -86,7 +83,6 @@ def test_s04_missing_score_is_not_lost(client, redis_conn, run_worker, mock_llm)
     assert out["status"] == "PAUSED_FOR_REVIEW", out
 
 
-@pytest.mark.xfail(strict=True, reason="F06 unfixed: unvalidated model output")
 def test_s05_string_score_is_coerced(client, redis_conn, run_worker, mock_llm):
     """S05 (F06, L5): risk_score sent as the string "9" is coerced to 9 and the ticket is paused."""
     mock_llm.mode = "strscore:9"
@@ -96,7 +92,6 @@ def test_s05_string_score_is_coerced(client, redis_conn, run_worker, mock_llm):
     assert out["status"] == "PAUSED_FOR_REVIEW" and out.get("risk_score") == 9, out
 
 
-@pytest.mark.xfail(strict=True, reason="F06 unfixed: unvalidated model output")
 def test_s06_out_of_range_score_is_rejected(client, redis_conn, run_worker, mock_llm):
     """S06 (F06, L5): a score of 42 is not stored as-is; the ticket is paused and flagged UNCLASSIFIED."""
     mock_llm.mode = "valid:42"
@@ -106,7 +101,6 @@ def test_s06_out_of_range_score_is_rejected(client, redis_conn, run_worker, mock
     assert out["status"] == "PAUSED_FOR_REVIEW" and out.get("risk_score") != 42, out
 
 
-@pytest.mark.xfail(strict=True, reason="F07 unfixed: critic verdict ignored")
 def test_s07_critic_disagreement_pauses(client, redis_conn, run_worker, mock_llm):
     """S07 (F07, L5/L7): when the critic sets audit_passed=false on a low-scored ticket, the ticket is paused."""
     mock_llm.mode = "critic_disagree"

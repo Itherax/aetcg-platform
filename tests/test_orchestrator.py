@@ -9,12 +9,10 @@ from pipeline.orchestrator import StateMachineOrchestrator, REVIEW_THRESHOLD
 
 
 def make(triage, critic):
-    with patch("pipeline.orchestrator.redis.Redis") as redis_cls:
-        redis_cls.return_value = Mock()
-        orch = StateMachineOrchestrator()
-    orch.triage_agent = Mock(analyze=Mock(return_value=triage))
-    orch.critic_agent = Mock(critique=Mock(return_value=critic))
-    return orch
+    with patch("pipeline.orchestrator.redis.Redis", return_value=Mock()), \
+         patch("pipeline.orchestrator.TriageAgent", return_value=Mock(analyze=Mock(return_value=triage))), \
+         patch("pipeline.orchestrator.ComplianceCriticAgent", return_value=Mock(critique=Mock(return_value=critic))):
+        return StateMachineOrchestrator()
 
 
 OK_CRITIC = {"audit_passed": True, "feedback": "routine", "degraded": False}
