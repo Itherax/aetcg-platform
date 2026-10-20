@@ -3,7 +3,7 @@ import logging
 import time
 import threading
 from redis import Redis
-from rq import Queue, Worker
+from rq import Queue, Worker, get_current_job
 from config.settings import settings
 from app.metrics import (
     increment_counter,
@@ -50,7 +50,8 @@ def process_pipeline_task(payload: dict):
 
     try:
         orchestrator = StateMachineOrchestrator()
-        result = orchestrator.execute_workflow(payload)
+        current = get_current_job()
+        result = orchestrator.execute_workflow(payload, job_id=current.id if current else None)
 
         # Record successful processing metrics
         processing_time = time.time() - start_time

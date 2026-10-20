@@ -32,14 +32,24 @@ class StateMachineOrchestrator:
             db=0
         )
 
-    def execute_workflow(self, raw_job_data: dict) -> dict:
+    def persist_state(self, state: dict) -> None:
+        """Store the final state under the job id and index it by ticket id."""
+        ttl = settings.STATE_TTL_SEC
+        pipe = self.redis_client.pipeline()
+        pipe.set(f"state:{state['job_id']}", json.dumps(state), ex=ttl)
+        pipe.set(f"ticket:{state['ticket_id']}", state["job_id"], ex=ttl)
+        pipe.execute()
+
+    def execute_workflow(self, raw_job_data: dict, job_id: str = None) -> dict:
         start_time = time.time()
+        job_id = job_id or raw_job_data.get("job_id") or raw_job_data["ticket_id"]
 
         # Step 1: Ingestion & Sanitization
         clean_text = self.scrubber.scrub_pii(raw_job_data["raw_text"])
 
         # State Initialization
         state = {
+            "job_id": job_id,
             "ticket_id": raw_job_data["ticket_id"],
             "sanitized_text": clean_text,
             "risk_score": None,
@@ -89,10 +99,11 @@ class StateMachineOrchestrator:
         if reasons:
             state["status"] = "PAUSED_FOR_REVIEW"
             state["review_reason"] = "; ".join(reasons)
-            # Serialize state frame to Redis cache to allow human callback resumption
-            self.redis_client.set(f"state:{raw_job_data['ticket_id']}", json.dumps(state))
+            self.persist_state(state)
             return state
 
         state["status"] = "COMPLETED"
+        # Every outcome is stored: an autonomous close must be auditable too.
+        self.persist_state(state)
         observe_histogram(TICKET_PROCESSING_TIME_SECONDS, time.time() - start_time, {"status": "success"})
         return state

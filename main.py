@@ -332,7 +332,8 @@ async def ingest_ticket(request: Request, payload: TicketIngestionSchema):
             "latency_ms": (time.time() - start_time) * 1000,
             "client_ip": client_ip
         }))
-        return {"status": "queued", "job_id": job.id, "message": "Ticket verification initiated."}
+        return {"status": "queued", "job_id": job.id, "ticket_id": payload.ticket_id,
+                "message": "Ticket verification initiated."}
 
     except Exception as e:
         # Record ingestion failure metrics
@@ -349,6 +350,16 @@ async def ingest_ticket(request: Request, payload: TicketIngestionSchema):
             detail="Internal messaging backbone unreached."
         )
 
+def resolve_state_key(identifier: str):
+    """Accept either the job id returned by POST /triage or the caller's ticket id."""
+    if redis_client.exists(f"state:{identifier}"):
+        return f"state:{identifier}"
+    job_id = redis_client.get(f"ticket:{identifier}")
+    if job_id:
+        return f"state:{job_id.decode() if isinstance(job_id, bytes) else job_id}"
+    return None
+
+
 # State Check Endpoint
 @app.get("/api/v1/state/{job_id}")
 async def get_state(job_id: str):
@@ -357,8 +368,8 @@ async def get_state(job_id: str):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid job ID format")
 
     start_time = time.time()
-    state_key = f"state:{job_id}"
-    ticket_state = redis_client.get(state_key)
+    state_key = resolve_state_key(job_id)
+    ticket_state = redis_client.get(state_key) if state_key else None
     observe_histogram(REDIS_LATENCY_SECONDS, time.time() - start_time, {"operation": "get"})
 
     if not ticket_state:
@@ -389,9 +400,8 @@ async def administrative_approval_gate(request: Request, job_id: str, action: st
                          {"method": "PUT", "endpoint": "/api/v1/approve/{job_id}", "status_code": "403", "http_version": "1.1"})
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Unauthorized gate access.")
 
-    # Simulate loading state container from database/Redis cache and advancing graph
-    state_key = f"state:{job_id}"
-    cached_state = redis_client.get(state_key)
+    state_key = resolve_state_key(job_id)
+    cached_state = redis_client.get(state_key) if state_key else None
     observe_histogram(REDIS_LATENCY_SECONDS, time.time() - start_time, {"operation": "get"})
 
     if not cached_state:
