@@ -78,6 +78,19 @@ class AppSettings(BaseSettings):
         default="SECURE_GOVERNANCE_TOKEN_XYZ",
         description="Token for supervisor approval endpoint"
     )
+    CORS_ALLOWED_ORIGINS: str = Field(
+        default="http://localhost:8000",
+        description="Comma-separated browser origins allowed to call the API. '*' allows any origin but then credentials are never allowed."
+    )
+
+    def cors_origins(self) -> list:
+        return [o.strip() for o in self.CORS_ALLOWED_ORIGINS.split(",") if o.strip()]
+
+    def cors_allow_credentials(self) -> bool:
+        # The Fetch spec forbids Access-Control-Allow-Origin: * together with
+        # credentials; browsers reject it and permissive middleware echoes the
+        # caller's origin instead, which is worse.
+        return "*" not in self.cors_origins()
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 

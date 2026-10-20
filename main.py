@@ -95,12 +95,13 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Add CORS middleware with environment-based configuration
-origins = ["*"] if settings.APP_ENV == "development" else ["https://yourdomain.com"]
+# CORS: explicit allow-list from settings in every environment. Previously
+# development used "*" with credentials (the preflight echoed any origin) and
+# production used the placeholder https://yourdomain.com.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,
+    allow_origins=settings.cors_origins(),
+    allow_credentials=settings.cors_allow_credentials(),
     allow_methods=["GET", "POST", "PUT"],
     allow_headers=["*"],
 )
