@@ -214,7 +214,7 @@ def test_s16_same_text_from_another_reporter_is_not_served_from_cache(client, re
 def test_s16b_cache_key_is_stable_across_processes():
     """S16b (F04, L6): the cache key for a payload is the same in two separate Python processes."""
     import subprocess, sys
-    code = ("from main import cache_key; "
+    code = ("from pipeline.cache import cache_key; "
             "print(cache_key({'ticket_id': 'T', 'reporter_email': 'a@enterprise.com', 'raw_text': 'x'}))")
     runs = {subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True).stdout.strip()
             for _ in range(2)}

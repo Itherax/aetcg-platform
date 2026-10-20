@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, HTMLResponse
 from config.settings import settings
 from pipeline.validation import TicketIngestionSchema
+from pipeline.cache import cache_key
 from worker import queue_triage_job
 import redis
 from app.metrics import (
@@ -266,7 +267,6 @@ async def add_security_headers(request: Request, call_next):
 @app.post("/api/v1/triage", status_code=status.HTTP_202_ACCEPTED)
 async def ingest_ticket(request: Request, payload: TicketIngestionSchema):
     start_time = time.time()
-    payload_hash = hash(payload.raw_text)
 
     # Extract request information for metrics and logging
     client_ip = request.client.host if request.client else "unknown"
@@ -281,7 +281,7 @@ async def ingest_ticket(request: Request, payload: TicketIngestionSchema):
                             detail=f"ticket_id {payload.ticket_id} already has a recorded outcome; use a new id.")
 
     # Milestone 6: Optimization / Query Caching Layer
-    cached_result = redis_client.get(f"cache:{payload_hash}")
+    cached_result = redis_client.get(cache_key(payload.model_dump()))
     if cached_result:
         # Record cache hit metrics
         increment_counter(CACHE_HITS_TOTAL, {"cache_type": "redis"})
@@ -306,11 +306,9 @@ async def ingest_ticket(request: Request, payload: TicketIngestionSchema):
         # Update payload with sanitized text if changes were made
         if clean_text != payload.raw_text:
             payload.raw_text = clean_text
-            # Re-hash the sanitized payload
-            payload_hash = hash(payload.raw_text)
             # Check cache again with sanitized payload. The miss above already
             # counted this request; a second lookup is not a second miss.
-            cached_result = redis_client.get(f"cache:{payload_hash}")
+            cached_result = redis_client.get(cache_key(payload.model_dump()))
             if cached_result:
                 # Record cache hit after sanitization
                 increment_counter(CACHE_HITS_TOTAL, {"cache_type": "redis"})
