@@ -127,7 +127,6 @@ def _paused_ticket(client, run_worker, mock_llm, ticket_id):
     return r.json()["job_id"]
 
 
-@pytest.mark.xfail(strict=True, reason="F05 unfixed: approval gate replayable")
 def test_s08_second_approval_is_rejected(client, redis_conn, run_worker, mock_llm):
     """S08 (F05, L7): approving an already-approved ticket returns 409 and does not rewrite the decision."""
     job_id = _paused_ticket(client, run_worker, mock_llm, "TCK-S08")
@@ -137,7 +136,6 @@ def test_s08_second_approval_is_rejected(client, redis_conn, run_worker, mock_ll
     assert second.status_code == 409, second.text
 
 
-@pytest.mark.xfail(strict=True, reason="F05 unfixed: approval gate reversible")
 def test_s09_reject_after_approve_is_rejected(client, redis_conn, run_worker, mock_llm):
     """S09 (F05, L7): a decision cannot be flipped from APPROVE to REJECT through the gate."""
     job_id = _paused_ticket(client, run_worker, mock_llm, "TCK-S09")
@@ -147,7 +145,6 @@ def test_s09_reject_after_approve_is_rejected(client, redis_conn, run_worker, mo
     assert client.get(f"/api/v1/state/{job_id}").json()["status"] == "COMPLETED"
 
 
-@pytest.mark.xfail(strict=True, reason="F05 unfixed: gate not state-aware")
 def test_s10_cannot_approve_unpaused_ticket(client, redis_conn, run_worker, mock_llm):
     """S10 (F05, L7): the gate only acts on tickets that are PAUSED_FOR_REVIEW; a COMPLETED ticket gets 409."""
     r = submit(client, "TCK-S10", "Routine request")
@@ -156,7 +153,6 @@ def test_s10_cannot_approve_unpaused_ticket(client, redis_conn, run_worker, mock
     assert resp.status_code == 409, resp.text
 
 
-@pytest.mark.xfail(strict=True, reason="F03 unfixed: ticket overwrite")
 def test_s11_resubmitting_decided_ticket_is_rejected(client, redis_conn, run_worker, mock_llm):
     """S11 (F03, L7): re-POSTing a ticket_id that already has a decision returns 409 and leaves the decision intact."""
     job_id = _paused_ticket(client, run_worker, mock_llm, "TCK-S11")
