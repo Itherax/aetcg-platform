@@ -95,6 +95,7 @@ class TestAPIEndpoints:
         """Test successful ticket ingestion"""
         with patch('main.queue_triage_job') as mock_queue, \
              patch('main.redis_client') as mock_redis:
+            mock_redis.exists.return_value = 0  # no stored outcome for this ticket id
             mock_job = Mock()
             mock_job.id = "test-job-id-123"
             mock_queue.return_value = mock_job
@@ -114,7 +115,10 @@ class TestAPIEndpoints:
         """Test ticket ingestion with cache hit"""
         cached_response = {"status": "cached", "result": "test result"}
         with patch('main.redis_client') as mock_redis:
-            mock_redis.get.return_value = json.dumps(cached_response).encode()
+            mock_redis.exists.return_value = 0  # no stored outcome for this ticket id
+            # Only cache:* keys hold a value; the ticket index is empty.
+            mock_redis.get.side_effect = lambda key: (
+                json.dumps(cached_response).encode() if str(key).startswith("cache:") else None)
 
             response = client.post("/api/v1/triage", json=valid_ticket_data)
             assert response.status_code == 200  # Cache hit returns 200, not 202
@@ -122,7 +126,7 @@ class TestAPIEndpoints:
             assert data == cached_response
 
             # Verify cache was checked
-            mock_redis.get.assert_called_once()
+            assert any(str(c.args[0]).startswith("cache:") for c in mock_redis.get.call_args_list)
 
 
     def test_ingest_ticket_invalid_email(self, client):
@@ -139,6 +143,7 @@ class TestAPIEndpoints:
     def test_state_endpoint_not_found(self, client):
         """Test state endpoint for non-existent job"""
         with patch('main.redis_client') as mock_redis:
+            mock_redis.exists.return_value = 0  # no stored outcome for this ticket id
             mock_redis.get.return_value = None  # No state found
             response = client.get("/api/v1/state/non-existent-job")
             assert response.status_code == 404
@@ -154,9 +159,10 @@ class TestAPIEndpoints:
     def test_approval_endpoint_success(self, client):
         """Test approval endpoint with valid token"""
         with patch('main.redis_client') as mock_redis:
+            mock_redis.exists.return_value = 0  # no stored outcome for this ticket id
             mock_redis.get.return_value = json.dumps({
-                "status": "PENDING",
-                "human_approval": None
+                "status": "PAUSED_FOR_REVIEW",
+                "human_approval": "PENDING"
             }).encode()
 
             response = client.put(
@@ -185,6 +191,7 @@ class TestAPIEndpoints:
         # Mock both Redis connections
         with patch('main.redis_client') as mock_main_redis, \
              patch.object(worker, 'task_queue') as mock_task_queue:
+            mock_main_redis.exists.return_value = 0  # no stored outcome for this ticket id
 
             # Mock main Redis client for cache checking
             mock_main_redis.get.return_value = None  # No cache hit
@@ -471,6 +478,7 @@ class TestIntegrationScenarios:
         # 1. Ingest ticket - need to mock both Redis connections
         with patch('main.redis_client') as mock_main_redis, \
              patch('redis.Redis') as mock_redis_class:
+            mock_main_redis.exists.return_value = 0  # no stored outcome for this ticket id
             # Set up the mock Redis instance for worker
             mock_redis_instance = Mock()
             mock_redis_instance.set.return_value = True
@@ -496,6 +504,7 @@ class TestIntegrationScenarios:
 
         # 2. Check state (initially queued/processing)
         with patch('main.redis_client') as mock_redis:
+            mock_redis.exists.return_value = 0  # no stored outcome for this ticket id
             mock_redis.get.return_value = json.dumps({
                 "status": "PROCESSING",
                 "progress": 50
@@ -506,11 +515,12 @@ class TestIntegrationScenarios:
             state_data = state_response.json()
             assert state_data["status"] == "PROCESSING"
 
-        # 3. Approve ticket
+        # 3. Approve ticket (only a paused ticket can be decided)
         with patch('main.redis_client') as mock_redis:
+            mock_redis.exists.return_value = 0  # no stored outcome for this ticket id
             mock_redis.get.return_value = json.dumps({
-                "status": "PROCESSING",
-                "human_approval": None
+                "status": "PAUSED_FOR_REVIEW",
+                "human_approval": "PENDING"
             }).encode()
             mock_redis.set.return_value = True
 
@@ -535,6 +545,7 @@ class TestIntegrationScenarios:
         # since main.redis_client is created at import time
         with patch('main.redis_client') as mock_main_redis, \
              patch('redis.Redis') as mock_redis_class:
+            mock_main_redis.exists.return_value = 0  # no stored outcome for this ticket id
             # Set up the mock Redis instance for worker
             mock_redis_instance = Mock()
             mock_redis_instance.set.return_value = True
@@ -561,6 +572,7 @@ class TestIntegrationScenarios:
         # Need to mock both Redis connections for the internal error test
         with patch('main.redis_client') as mock_main_redis, \
              patch('redis.Redis') as mock_redis_class:
+            mock_main_redis.exists.return_value = 0  # no stored outcome for this ticket id
             # Set up the mock Redis instance for worker
             mock_redis_instance = Mock()
             mock_redis_instance.set.return_value = True
@@ -594,6 +606,7 @@ class TestIntegrationScenarios:
         # since main.redis_client is created at import time
         with patch('main.redis_client') as mock_main_redis, \
              patch('redis.Redis') as mock_redis_class:
+            mock_main_redis.exists.return_value = 0  # no stored outcome for this ticket id
             # Set up the mock Redis instance for worker
             mock_redis_instance = Mock()
             mock_redis_instance.set.return_value = True
@@ -636,10 +649,12 @@ class TestIntegrationScenarios:
             "raw_text": "This ticket should be cached"
         }
 
-        # Mock the cache to return a value on second call
+        # Mock the cache to return a value on the second cache lookup
         call_count = 0
         def mock_get_side_effect(key):
             nonlocal call_count
+            if not str(key).startswith("cache:"):
+                return None  # ticket index / state lookups: no prior outcome
             call_count += 1
             if call_count == 1:
                 return None  # First call - cache miss
@@ -647,6 +662,7 @@ class TestIntegrationScenarios:
                 return json.dumps({"cached": "result", "data": "test"}).encode()  # Second call - cache hit
 
         with patch('main.redis_client') as mock_redis:
+            mock_redis.exists.return_value = 0  # no stored outcome for this ticket id
             mock_redis.get.side_effect = mock_get_side_effect
             mock_redis.set.return_value = True
 
@@ -682,6 +698,7 @@ class TestIntegrationScenarios:
         # since main.redis_client is created at import time
         with patch('main.redis_client') as mock_main_redis, \
              patch('redis.Redis') as mock_redis_class:
+            mock_main_redis.exists.return_value = 0  # no stored outcome for this ticket id
             # Set up the mock Redis instance for worker
             mock_redis_instance = Mock()
             mock_redis_instance.set.return_value = True
@@ -729,6 +746,7 @@ class TestPerformanceAndLoad:
         # since main.redis_client is created at import time
         with patch('main.redis_client') as mock_main_redis, \
              patch('redis.Redis') as mock_redis_class:
+            mock_main_redis.exists.return_value = 0  # no stored outcome for this ticket id
             # Set up the mock Redis instance for worker
             mock_redis_instance = Mock()
             mock_redis_instance.set.return_value = True
@@ -773,6 +791,7 @@ class TestPerformanceAndLoad:
         # since main.redis_client is created at import time
         with patch('main.redis_client') as mock_main_redis, \
              patch('redis.Redis') as mock_redis_class:
+            mock_main_redis.exists.return_value = 0  # no stored outcome for this ticket id
             # Set up the mock Redis instance for worker
             mock_redis_instance = Mock()
             mock_redis_instance.set.return_value = True
