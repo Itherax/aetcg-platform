@@ -28,14 +28,31 @@ redis_connection = Redis(host=settings.REDIS_HOST, port=settings.REDIS_PORT, db=
 task_queue = Queue("aetcg_jobs", connection=redis_connection)
 
 
+HEARTBEAT_KEY = "worker:health_signal"
+HEARTBEAT_TTL_SEC = 20       # the API treats a heartbeat older than 15 s as dead
+HEARTBEAT_INTERVAL_SEC = 5
+
+
+def write_health_signal(connection=None) -> int:
+    """Write the current epoch second under HEARTBEAT_KEY with a short TTL.
+
+    Commit 37bba43 swapped setex() for set() but kept the argument order of
+    setex(name, time, value), so the key held the value 20 with an expiry of
+    <current epoch> seconds (about 56 years). The API read '20' as the
+    timestamp and reported the worker dead forever.
+    """
+    conn = connection or redis_connection
+    now = int(time.time())
+    conn.set(HEARTBEAT_KEY, now, ex=HEARTBEAT_TTL_SEC)
+    return now
+
+
 def update_worker_health_signal():
     """Periodically update worker health signal in Redis to indicate liveness and job processing capability."""
     while True:
         try:
-            # Set health signal timestamp (expires in 20 seconds)
-            # Updated when worker successfully processes a job or periodically when idle
-            redis_connection.set("worker:health_signal", 20, int(time.time()))
-            time.sleep(5)  # Update every 5 seconds
+            write_health_signal()
+            time.sleep(HEARTBEAT_INTERVAL_SEC)
         except Exception as e:
             logger.error(f"Failed to update worker health signal: {e}")
             time.sleep(5)  # Wait before retrying
