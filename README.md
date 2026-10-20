@@ -52,9 +52,10 @@ The design is intended to model an enterprise governance workflow, not a product
 - metrics are emitted on queue activity, processing time, risk score distribution, and compliance outcomes
 
 ### Review and governance layer
-- `GET /api/v1/state/{job_id}` returns the stored workflow state
-- `PUT /api/v1/approve/{job_id}` accepts an approval or rejection action from a supervisor token
-- tickets with a risk score above the review threshold are paused for human intervention
+- `GET /api/v1/state/{id}` returns the stored workflow state; `{id}` is the `job_id` returned by `POST /api/v1/triage` or the caller's `ticket_id`. Every outcome is stored (including autonomous completions) for `STATE_TTL_SEC` seconds
+- `PUT /api/v1/approve/{id}` accepts an approval or rejection from a supervisor token; only a `PAUSED_FOR_REVIEW` ticket can be decided, exactly once (`409` otherwise)
+- tickets with a risk score at or above the review threshold (7), tickets whose triage failed or returned invalid output, and tickets the critic did not pass are paused for human intervention — the pipeline never completes a ticket it could not score
+- a `ticket_id` that already has a recorded outcome cannot be resubmitted (`409`)
 
 ### Observability layer
 - `GET /health` returns health information for Redis and external API availability
@@ -70,20 +71,22 @@ The design is intended to model an enterprise governance workflow, not a product
 
 ## Quick start
 
-### Option 1: Docker Compose
+### Option 1: Docker Compose (one command)
 
 ```bash
 git clone https://github.com/adibuzz/aetcg-platform.git
 cd aetcg-platform
-cp .env.example .env
-docker compose up --build
+cp .env.example .env     # optional; defaults work for a local demo
+docker compose up --build   # or: make up
 ```
 
-This starts:
+This starts three separately supervised containers:
 
-- the FastAPI web service on port `8000`
-- a background worker process
-- a Redis broker service
+- `web_api` — the FastAPI service on port `8000`, with a `/health` healthcheck
+- `worker` — the RQ worker (restarted automatically if it exits)
+- `queue_broker` — Redis with append-only persistence on a named volume, not published outside the compose network
+
+`make test` runs the unit tests and the scenario suite; `make scenarios` prints the before/after scorecard.
 
 Verify the app is running:
 
@@ -131,6 +134,8 @@ Common values include:
 - `LLM_ACCESS_TOKEN` — access token for LLM calls
 - `RATE_LIMIT_REQUESTS_PER_MINUTE` — per-IP rate limit
 - `SUPERVISOR_TOKEN` — token required for approval endpoints
+- `CORS_ALLOWED_ORIGINS` — comma-separated browser origins allowed to call the API (`*` disables credentials)
+- `STATE_TTL_SEC` — how long ticket outcomes stay readable (default 7 days)
 - `METRICS_ENABLED` — enables Prometheus metrics and dashboard endpoints
 
 ## Example API usage
@@ -153,6 +158,7 @@ Response example:
 {
   "status": "queued",
   "job_id": "<job-id>",
+  "ticket_id": "TCK-001",
   "message": "Ticket verification initiated."
 }
 ```
@@ -177,7 +183,7 @@ Run the test suite with:
 python -m pytest -q
 ```
 
-The repository includes API tests, workflow tests, and validation tests under `tests/`.
+The repository includes API tests, workflow tests, and validation tests under `tests/`, plus a scenario suite (`tests/scenarios/`) that runs the real API, worker and a controllable mock LLM against a live Redis. Set `REDIS_HOST`/`REDIS_PORT` to point at it; the scenarios skip when Redis is unreachable. `python scripts/scenario_suite.py` prints the scorecard.
 
 ## Troubleshooting
 

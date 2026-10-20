@@ -1,25 +1,62 @@
+# One command starts the whole platform:
+#     docker compose up --build
+# (or `make up`). Three services: the API, a separately supervised worker,
+# and a private, persistent Redis. Nothing is published except the API port.
+
 networks:
   aetcg_secure_mesh:
     driver: bridge
 
+volumes:
+  redis_data:
+
+x-app: &app
+  build:
+    context: .
+    target: runner
+  env_file:
+    - path: .env
+      required: false
+  environment:
+    - REDIS_HOST=queue_broker
+    - REDIS_PORT=6379
+  networks:
+    - aetcg_secure_mesh
+  depends_on:
+    queue_broker:
+      condition: service_healthy
+  restart: unless-stopped
+
 services:
   web_api:
-    build:
-      context: .
-      target: runner
+    <<: *app
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
     ports:
       - "8000:8000"
-    environment:
-      - REDIS_HOST=queue_broker
-      - REDIS_PORT=6379
-    command: [sh, -c, "python worker.py & uvicorn main:app --host 0.0.0.0 --port 8000"]
-    networks:
-      - aetcg_secure_mesh
-    depends_on:
-      - queue_broker
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).status < 500 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  worker:
+    <<: *app
+    # The worker used to be `python worker.py &` inside the API container:
+    # when it died the container stayed up and nothing restarted it.
+    command: ["python", "worker.py"]
 
   queue_broker:
     image: redis:7.2-alpine
-    # Explicitly omitting public port bindings blocks external network ingestion vectors entirely
+    command: ["redis-server", "--appendonly", "yes", "--save", ""]
+    volumes:
+      - redis_data:/data
+    # No public port binding: Redis is reachable only on the compose network.
     networks:
       - aetcg_secure_mesh
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped

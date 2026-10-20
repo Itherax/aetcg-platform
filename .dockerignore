@@ -1,0 +1,12 @@
+.env
+.git
+.gitignore
+__pycache__/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+.coverage
+graphify-out/
+*.log
+venv/
+.venv/
