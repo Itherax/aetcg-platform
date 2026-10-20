@@ -183,7 +183,6 @@ def test_s13_cache_miss_counted_once_per_request(client, redis_conn):
 
 
 # ---------------------------------------------------------------- L3 ----
-@pytest.mark.xfail(strict=True, reason="F19 unfixed: permissive CORS")
 def test_s14_cors_does_not_echo_unknown_origin(client):
     """S14 (F19, L3): a preflight from an origin not on the allow-list is not granted credentials."""
     resp = client.options("/api/v1/triage", headers={"Origin": "https://evil.example",
