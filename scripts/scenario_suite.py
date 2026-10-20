@@ -26,7 +26,7 @@ def main():
     proc = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
     results = {}
     for line in proc.stdout.splitlines():
-        m = re.match(r"^(PASSED|FAILED|SKIPPED|ERROR) tests/scenarios/test_scenarios.py::(\w+)", line)
+        m = re.match(r"^(PASSED|FAILED|SKIPPED|ERROR|XFAIL|XPASS) tests/scenarios/test_scenarios.py::(\w+)", line)
         if m:
             results[m.group(2)] = m.group(1)
     # titles from docstrings
