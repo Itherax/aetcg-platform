@@ -173,7 +173,6 @@ def test_s12_heartbeat_stores_timestamp_with_short_ttl(redis_conn):
     assert 0 < redis_conn.ttl("worker:health_signal") <= 20
 
 
-@pytest.mark.xfail(strict=True, reason="F22 unfixed: metrics double-counted")
 def test_s13_cache_miss_counted_once_per_request(client, redis_conn):
     """S13 (F22, L8): one POST that misses the cache increments cache_misses_total by exactly 1."""
     from app.metrics import CACHE_MISSES_TOTAL
