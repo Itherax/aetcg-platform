@@ -6,9 +6,11 @@ Each agent interacts with a configurable LLM endpoint to perform specialized ana
 """
 import json
 import logging
+import re
 import time
 from typing import Dict, Any, Optional
 from openai import OpenAI
+from pydantic import BaseModel, Field, ValidationError, field_validator
 from config.settings import settings
 from app.metrics import (
     LLM_API_CALLS_TOTAL,
@@ -19,6 +21,58 @@ from app.metrics import (
 )
 
 logger = logging.getLogger("aetcg_agents")
+
+_FENCE = re.compile(r"^\s*```(?:json)?\s*(.*?)\s*```\s*$", re.DOTALL)
+
+
+class ModelOutputError(ValueError):
+    """The model replied, but not in a shape the pipeline can trust."""
+
+
+class TriageOutput(BaseModel):
+    risk_score: int = Field(ge=1, le=10)
+    category: str = "UNCLASSIFIED"
+    verdict: str = ""
+
+    @field_validator("risk_score", mode="before")
+    @classmethod
+    def coerce_score(cls, v):
+        # Models sometimes quote numbers ("7"); accept that, reject words.
+        if isinstance(v, str) and v.strip().lstrip("-").isdigit():
+            return int(v.strip())
+        return v
+
+
+class CriticOutput(BaseModel):
+    audit_passed: bool
+    feedback: str = ""
+
+    @field_validator("audit_passed", mode="before")
+    @classmethod
+    def strict_bool(cls, v):
+        if isinstance(v, bool):
+            return v
+        raise ValueError("audit_passed must be a JSON boolean")
+
+
+def _parse_json_reply(raw: str, model: type[BaseModel]) -> BaseModel:
+    """Strip an optional ```json fence, parse, validate. Never returns garbage."""
+    if not isinstance(raw, str):
+        raise ModelOutputError(f"expected string content, got {type(raw).__name__}")
+    text = raw.strip()
+    fenced = _FENCE.match(text)
+    if fenced:
+        text = fenced.group(1)
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as e:
+        raise ModelOutputError(f"reply is not JSON: {e}") from e
+    if not isinstance(data, dict):
+        raise ModelOutputError("reply JSON is not an object")
+    try:
+        return model.model_validate(data)
+    except ValidationError as e:
+        raise ModelOutputError(f"reply failed validation: {e.errors()[0]['msg']} at {e.errors()[0]['loc']}") from e
 
 
 class TriageAgent:
@@ -64,8 +118,8 @@ class TriageAgent:
                 - verdict: String explaining the reasoning behind the assessment
 
         Note:
-            On failure, returns a fallback response with medium risk score
-            and UNCLASSIFIED_TIMEOUT category.
+            On failure or invalid output, returns risk_score None with
+            degraded=True so the orchestrator routes the ticket to a human.
         """
         start_time = time.time()
         try:
@@ -92,7 +146,8 @@ class TriageAgent:
             # In a real implementation, you'd extract this from response.usage if available
 
             logger.debug(f"Triage Agent Result: {raw_result}")
-            return self.parse_analysis_result(raw_result)
+            parsed = self.parse_analysis_result(raw_result)
+            return {**parsed.model_dump(), "degraded": False, "error": None}
 
         except Exception as e:
             # Record failed LLM API call metrics
@@ -100,28 +155,27 @@ class TriageAgent:
             increment_counter(LLM_API_CALLS_TOTAL, {"agent_name": "triage", "status": "failure"})
             observe_histogram(LLM_API_DURATION_SECONDS, call_duration, {"agent_name": "triage"})
 
-            logger.error(f"Live LLM call failed at custom endpoint: {str(e)}. Applying fallback.")
+            kind = "invalid model output" if isinstance(e, ModelOutputError) else "LLM call failed"
+            logger.error(f"Triage {kind}: {str(e)}. Ticket will be routed to human review.")
+            # Fail CLOSED: no score means a human decides, never a default score.
             return {
-                "risk_score": 5,
-                "category": "UNCLASSIFIED_TIMEOUT",
-                "verdict": "Network routing timeout encountered during live LLM analysis."
+                "risk_score": None,
+                "category": "UNCLASSIFIED",
+                "verdict": f"Triage unavailable ({kind}); human review required.",
+                "degraded": True,
+                "error": str(e),
             }
 
     @staticmethod
-    def parse_analysis_result(raw_result: str) -> Dict[str, Any]:
+    def parse_analysis_result(raw_result: str) -> TriageOutput:
         """
-        Parse raw LLM response into structured dictionary.
+        Parse and validate the raw LLM reply.
 
-        Args:
-            raw_result: JSON string from LLM response
-
-        Returns:
-            Parsed dictionary with risk_score, category, and verdict keys
-
-        Raises:
-            json.JSONDecodeError: If raw_result is not valid JSON
+        Accepts plain JSON or JSON inside a ```json fence; coerces a quoted
+        integer score. Raises ModelOutputError for anything else (missing
+        keys, out-of-range score, non-numeric score, non-JSON text).
         """
-        return json.loads(raw_result)
+        return _parse_json_reply(raw_result, TriageOutput)
 
 
 class ComplianceCriticAgent:
@@ -172,9 +226,8 @@ class ComplianceCriticAgent:
                 - feedback: String explaining the compliance decision
 
         Note:
-            On failure, returns fail-safe response based on risk score:
-            - High risk (>=7): audit fails, mandating human review
-            - Low risk (<7): audit passes, allowing standard routing
+            On failure or invalid output, returns audit_passed False with
+            degraded=True: an unreviewed verdict never counts as a pass.
         """
         start_time = time.time()
         try:
@@ -205,7 +258,8 @@ class ComplianceCriticAgent:
             # For now, we'll skip token usage as it's not consistently available across providers
             # In a real implementation, you'd extract this from response.usage if available
 
-            return self.parse_critique_result(raw_result)
+            parsed = self.parse_critique_result(raw_result)
+            return {**parsed.model_dump(), "degraded": False}
 
         except Exception as e:
             # Record failed LLM API call metrics
@@ -213,24 +267,17 @@ class ComplianceCriticAgent:
             increment_counter(LLM_API_CALLS_TOTAL, {"agent_name": "critic", "status": "failure"})
             observe_histogram(LLM_API_DURATION_SECONDS, call_duration, {"agent_name": "critic"})
 
-            logger.error(f"Critic Agent custom LLM call failed: {str(e)}. Applying fail-safe fallback.")
-            if risk_score >= 7:
-                return {"audit_passed": False, "feedback": "FALLBACK TRIGGERED: High score. Human review mandated."}
-            return {"audit_passed": True, "feedback": "FALLBACK TRIGGERED: Processing cleared for standard autonomous routing."}
+            logger.error(f"Critic Agent call failed or returned invalid output: {str(e)}. Failing safe.")
+            # Fail CLOSED regardless of score: an unreviewed verdict is not a pass.
+            return {"audit_passed": False,
+                    "feedback": "FALLBACK TRIGGERED: critic unavailable; human review mandated.",
+                    "degraded": True}
 
     @staticmethod
-    def parse_critique_result(raw_result: str) -> Dict[str, Any]:
+    def parse_critique_result(raw_result: str) -> CriticOutput:
         """
-        Parse raw LLM response into structured dictionary.
-
-        Args:
-            raw_result: JSON string from LLM response
-
-        Returns:
-            Parsed dictionary with audit_passed and feedback keys
-
-        Raises:
-            json.JSONDecodeError: If raw_result is not valid JSON
+        Parse and validate the critic's reply (plain or fenced JSON);
+        audit_passed must be a real boolean. Raises ModelOutputError otherwise.
         """
-        return json.loads(raw_result)
+        return _parse_json_reply(raw_result, CriticOutput)
 
