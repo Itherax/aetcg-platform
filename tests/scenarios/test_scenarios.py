@@ -219,3 +219,15 @@ def test_s16b_cache_key_is_stable_across_processes():
     runs = {subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True).stdout.strip()
             for _ in range(2)}
     assert len(runs) == 1, runs
+
+
+def test_s16c_shifted_fields_do_not_share_a_cache_entry(client, redis_conn, run_worker):
+    """S16c (F04, L6): payloads whose fields are shifted across the old '|' separator get different cache entries."""
+    first = client.post("/api/v1/triage", json={"ticket_id": "T", "reporter_email": "alice@enterprise.com",
+                                                "raw_text": "bob@enterprise.com|secret"})
+    assert first.status_code == 202
+    run_worker()
+    second = client.post("/api/v1/triage", json={"ticket_id": "T|alice@enterprise.com",
+                                                 "reporter_email": "bob@enterprise.com", "raw_text": "secret"})
+    assert second.status_code == 202, second.text
+    assert second.json()["job_id"] != first.json()["job_id"]
