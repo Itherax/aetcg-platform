@@ -273,6 +273,12 @@ async def ingest_ticket(request: Request, payload: TicketIngestionSchema):
     endpoint = request.url.path
     http_version = request.scope.get("http_version", "1.1")
 
+    # A ticket id that already has a stored outcome cannot be re-submitted:
+    # re-running the pipeline would overwrite a human's decision.
+    if resolve_state_key(payload.ticket_id):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                            detail=f"ticket_id {payload.ticket_id} already has a recorded outcome; use a new id.")
+
     # Milestone 6: Optimization / Query Caching Layer
     cached_result = redis_client.get(f"cache:{payload_hash}")
     if cached_result:
@@ -407,11 +413,24 @@ async def administrative_approval_gate(request: Request, job_id: str, action: st
     if not cached_state:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="State vector context unrecovered.")
 
-    state = json.loads(cached_state)
-    state["human_approval"] = action
-    state["status"] = "COMPLETED" if action == "APPROVE" else "REJECTED"
-
-    redis_client.set(state_key, json.dumps(state))
+    # The gate is one-shot: it only moves a ticket out of PAUSED_FOR_REVIEW,
+    # and two supervisors cannot race each other through it.
+    lock_key = f"lock:{state_key}"
+    if not redis_client.set(lock_key, "1", nx=True, ex=5):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Decision already in progress.")
+    try:
+        state = json.loads(redis_client.get(state_key))
+        if state.get("status") != "PAUSED_FOR_REVIEW":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Ticket is {state.get('status')}; only PAUSED_FOR_REVIEW tickets can be decided.")
+        state["human_approval"] = action
+        state["status"] = "COMPLETED" if action == "APPROVE" else "REJECTED"
+        state["decided_at"] = time.time()
+        state["decided_by"] = "supervisor"  # one shared token today; see backlog (per-user credentials)
+        redis_client.set(state_key, json.dumps(state), ex=settings.STATE_TTL_SEC)
+    finally:
+        redis_client.delete(lock_key)
 
     # Record approval/rejection metrics
     if action == "APPROVE":
