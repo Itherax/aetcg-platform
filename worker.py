@@ -5,6 +5,7 @@ import threading
 from redis import Redis
 from rq import Queue, Worker, get_current_job
 from config.settings import settings
+from pipeline.cache import cache_key
 from app.metrics import (
     increment_counter,
     observe_histogram,
@@ -79,13 +80,13 @@ def process_pipeline_task(payload: dict):
         # owned by the orchestrator, which has the typed values; counting
         # them again here doubled every figure on the dashboard.
 
-        # Cache the final state result for API lookup
-        redis_connection.set(f"cache:{hash(payload['raw_text'])}", json.dumps(result), ex=600)
+        # Cache the final state result for API lookup (same key function as the API)
+        redis_connection.set(cache_key(payload), json.dumps(result), ex=600)
 
         logger.info(json.dumps({
             "event": "task_processed_successfully",
             "processing_time_ms": processing_time * 1000,
-            "payload_hash": hash(payload['raw_text'])
+            "job_id": result.get("job_id") if isinstance(result, dict) else None
         }))
         return result
 
@@ -100,7 +101,7 @@ def process_pipeline_task(payload: dict):
             "event": "task_processing_failed",
             "error": str(e),
             "processing_time_ms": processing_time * 1000,
-            "payload_hash": hash(payload['raw_text'])
+            "ticket_id": payload.get("ticket_id")
         }))
         raise
 

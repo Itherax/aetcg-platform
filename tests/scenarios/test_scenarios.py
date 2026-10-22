@@ -199,3 +199,35 @@ def test_s15_queued_payload_contains_no_pii(client, redis_conn):
     job = Job.fetch(r.json()["job_id"], connection=redis_conn)
     raw_text = job.args[0]["raw_text"]
     assert "123-45-6789" not in raw_text and "bob@gmail.com" not in raw_text, raw_text
+
+
+# ---------------------------------------------------------------- L6 ----
+def test_s16_same_text_from_another_reporter_is_not_served_from_cache(client, redis_conn, run_worker):
+    """S16 (F04, L6): identical text under a different ticket id gets its own job; the cache never returns another ticket."""
+    first = submit(client, "TCK-S16A", "My laptop was stolen with customer records on it.", reporter="alice@enterprise.com")
+    run_worker()
+    second = submit(client, "TCK-S16B", "My laptop was stolen with customer records on it.", reporter="bob@enterprise.com")
+    assert second.status_code == 202, second.text
+    assert second.json()["job_id"] != first.json()["job_id"]
+
+
+def test_s16b_cache_key_is_stable_across_processes():
+    """S16b (F04, L6): the cache key for a payload is the same in two separate Python processes."""
+    import subprocess, sys
+    code = ("from pipeline.cache import cache_key; "
+            "print(cache_key({'ticket_id': 'T', 'reporter_email': 'a@enterprise.com', 'raw_text': 'x'}))")
+    runs = {subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True).stdout.strip()
+            for _ in range(2)}
+    assert len(runs) == 1, runs
+
+
+def test_s16c_shifted_fields_do_not_share_a_cache_entry(client, redis_conn, run_worker):
+    """S16c (F04, L6): payloads whose fields are shifted across the old '|' separator get different cache entries."""
+    first = client.post("/api/v1/triage", json={"ticket_id": "T", "reporter_email": "alice@enterprise.com",
+                                                "raw_text": "bob@enterprise.com|secret"})
+    assert first.status_code == 202
+    run_worker()
+    second = client.post("/api/v1/triage", json={"ticket_id": "T|alice@enterprise.com",
+                                                 "reporter_email": "bob@enterprise.com", "raw_text": "secret"})
+    assert second.status_code == 202, second.text
+    assert second.json()["job_id"] != first.json()["job_id"]
