@@ -164,7 +164,6 @@ def test_s11_resubmitting_decided_ticket_is_rejected(client, redis_conn, run_wor
 
 
 # ---------------------------------------------------------------- L8 ----
-@pytest.mark.xfail(strict=True, reason="F12 unfixed: heartbeat value")
 def test_s12_heartbeat_stores_timestamp_with_short_ttl(redis_conn):
     """S12 (F12, L8): one heartbeat write stores the current epoch second under worker:health_signal with a ~20 s TTL."""
     from worker import write_health_signal
