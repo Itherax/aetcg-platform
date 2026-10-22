@@ -385,7 +385,7 @@ class TestWorkerProcessing:
 
             # Verify orchestrator was used
             mock_orchestrator_class.assert_called_once()
-            mock_orchestrator.execute_workflow.assert_called_once_with(test_payload)
+            mock_orchestrator.execute_workflow.assert_called_once_with(test_payload, job_id=None)
 
             # Verify result was cached
             mock_redis.set.assert_called_once()

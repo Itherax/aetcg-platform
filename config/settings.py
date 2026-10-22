@@ -46,6 +46,12 @@ class AppSettings(BaseSettings):
         description="Access token for LLM service"
     )
 
+    STATE_TTL_SEC: int = Field(
+        default=7 * 24 * 3600,
+        description="How long a ticket's final state stays readable in Redis (seconds)",
+        gt=0
+    )
+
     # Metrics-related settings
     METRICS_ENABLED: bool = Field(
         default=True,
